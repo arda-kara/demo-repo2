@@ -1,4 +1,3 @@
-Based on the details you've provided, here's a customized README template for your GitHub repository. This template is tailored for your VSLAM system hardware accelerator project:
 
 ---
 
@@ -50,16 +49,10 @@ Contributions to this project are welcome. Please follow these steps to contribu
 4. Push to the branch (`git push origin feature/YourFeature`).
 5. Open a Pull Request.
 
-## License
-
-This project is licensed under the [LICENSE NAME] License - see the LICENSE.md file for details.
-
 ## Contact
 
-Your Name - email@example.com
+Arda Kara - ardakara1881@hotmail.com
 
 Project Link: [https://github.com/arda-kara/vslam-hardware-accelerator](https://github.com/yourusername/vslam-hardware-accelerator)
 
 ---
-
-Feel free to adjust any section to better fit your project's needs. A clear and comprehensive README can significantly aid others in understanding and contributing to your project.
