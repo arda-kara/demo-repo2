@@ -11,7 +11,8 @@ Port (
     MOSI                            : in  std_logic;
     MISO                            : out std_logic;
     receiver_ready                  : out std_logic;
-    transmitter_ready               : out std_logic
+    transmitter_ready               : out std_logic;
+    can_receive                     : out std_logic
 );
 end top_level_system;
 
@@ -28,8 +29,96 @@ architecture Behavioral of top_level_system is
         clk_out1: out std_logic
     );
     end component;
-
     
+    component spi_receiver is
+    port(
+        master_clk         : in  std_logic; -- Master Clock
+        reset            : in  std_logic; -- Global Reset
+        master_ready     : in  std_logic; -- Chip Select
+        MOSI             : in  std_logic; -- MOSI line
+        write_permission : in  std_logic; -- Signal indicating permission to write to FIFO Buffer
+        receiver_out     : out std_logic_vector(23 downto 0); -- 24-bit pixel data output
+        pixel_valid      : out std_logic; -- Indicates a valid pixel is ready
+        can_receive      : out std_logic  -- Indicates if the receiver can accept more data
+    );
+    end component;
+    
+    component spi_transmitter is
+    port(
+        master_clk              : in  std_logic;
+        reset                   : in  std_logic;
+        cdc_fifo_empty          : in  std_logic;
+        cdc_out                 : in  std_logic_vector(7 downto 0);
+        master_ready            : in  std_logic;
+        transmitter_empty       : out std_logic;
+        MISO                    : out std_logic;
+        transmitter_ready       : out std_logic
+    );
+    end component;
+        
+    component CDC_Unit_1 is
+    port(
+        -- Clocks
+        master_clk         : in std_logic;
+        internal_clk       : in std_logic;
+
+        -- Reset
+        reset              : in std_logic;
+
+        -- Signals from SPI Receiver (50 MHz domain)
+        receiver_out       : in std_logic_vector(23 downto 0);
+        pixel_valid        : in std_logic;  -- Retained
+        
+
+        -- Signals to FIFO Buffer and Controller (200 MHz domain)
+        receiver_out_cdc   : out std_logic_vector(23 downto 0);
+        pixel_valid_cdc    : out std_logic;  -- Retained
+        cdc_write          : in std_logic;  -- New signal
+        
+        -- Signal from FIFO Buffer Controller (200 MHz domain)
+        write_permission       : in std_logic;
+        cdc_read               : in std_logic;  -- New signal for read enable 
+
+        -- Signal to SPI Receiver and FIFO Buffer (50 MHz domain)
+        write_permission_cdc   : out std_logic;
+        
+        -- CDC FIFO signals
+        fifo_empty         : out std_logic;
+        fifo_full          : out std_logic       
+    );
+    end component;
+    
+    component CDC_Unit_2 is
+    port(
+        -- Clocks
+        internal_clk    : in std_logic;  -- 200 MHz internal clock
+        master_clk      : in std_logic;  -- 50 MHz master clock
+
+        -- Reset
+        reset           : in std_logic;
+
+        -- Signals from Grayscale Module (200 MHz domain)
+        gray_pixel   : in std_logic_vector(7 downto 0);
+        data_valid   : in std_logic;  -- Grayscale data valid
+        cdc_write    : in std_logic;
+        
+        -- Signals to SPI Transmitter (50 MHz domain)
+        gray_pixel_cdc  : out std_logic_vector(7 downto 0);
+        data_valid_cdc  : out std_logic;  -- Synchronized data valid signal
+
+        -- Signal from SPI Transmitter (50 MHz domain)
+        buffer_empty : in std_logic;  -- Transmitter buffer empty
+        cdc_read     : in std_logic;
+
+        -- Signal to Grayscale Module (200 MHz domain)
+        buffer_empty_cdc : out std_logic; -- Synchronized buffer empty signal
+
+        -- Buffer state signals
+        fifo_full       : out std_logic;  -- Indicates if the internal FIFO is full
+        fifo_empty      : out std_logic   -- Indicates if the internal FIFO is empty
+    );
+    end component;
+        
     component grayscale_circuit is
     port(
         sync_clk             : in std_logic;
@@ -112,6 +201,7 @@ architecture Behavioral of top_level_system is
    signal cdc2_fifo_empty : std_logic;
    signal write_to_cdc2 : std_logic;
    signal grayscale_data_valid : std_logic;
+   signal grayscale_data_valid_cdc : std_logic;
    
 begin
 
@@ -125,6 +215,35 @@ begin
         reset   => reset,        -- Connected to the global reset signal
         clk_in1 => master_clk,   -- Connected to the master clock (50 MHz)
         clk_out1=> internal_clk  -- Output connected to the internal clock signal
+    );
+    
+    spi_receiver_inst: spi_receiver
+    port map(
+        master_clk => master_clk,
+        reset      => reset,
+        master_ready => master_ready,
+        MOSI=> MOSI,
+        write_permission => write_permission,
+        receiver_out => receiver_out,
+        pixel_valid => pixel_valid,
+        can_receive => can_receive
+    );
+    
+    cdc_unit_1_inst: CDC_Unit_1 
+    port map(
+        master_clk => master_clk,
+        internal_clk => internal_clk,
+        reset => reset,
+        receiver_out => receiver_out,
+        pixel_valid => pixel_valid,
+        receiver_out_cdc => receiver_out_cdc,
+        pixel_valid_cdc => pixel_valid_cdc,
+        cdc_write => pixel_valid,
+        write_permission => write_permission,
+        cdc_read => fifo_write_enable,
+        write_permission_cdc => write_permission_cdc,
+        fifo_empty => cdc1_fifo_empty,
+        fifo_full => cdc1_fifo_full
     );
     
     fifo_module_inst: FIFO
@@ -179,4 +298,33 @@ begin
         process_next_pixel   => process_next_pixel -- To Grayscale Module
     );
 
+    cdc_unit_2_inst: CDC_Unit_2
+    port map(
+        internal_clk => internal_clk,
+        master_clk => master_clk,
+        reset => reset,
+        gray_pixel => gray_pixel,
+        data_valid => grayscale_data_valid,
+        cdc_write => write_to_cdc2,
+        gray_pixel_cdc => gray_pixel_cdc,
+        data_valid_cdc => grayscale_data_valid_cdc,
+        buffer_empty => transmitter_empty,
+        cdc_read => transmitter_empty,
+        buffer_empty_cdc => transmitter_empty_cdc,
+        fifo_full => cdc2_fifo_full,
+        fifo_empty => cdc2_fifo_empty
+            
+    );
+    
+    spi_transmitter_inst: spi_transmitter
+    port map(
+        master_clk => master_clk,
+        reset => reset,
+        cdc_fifo_empty => cdc2_fifo_empty,
+        cdc_out => gray_pixel_cdc,
+        master_ready => master_ready,
+        transmitter_empty => transmitter_empty,
+        MISO => MISO,
+        transmitter_ready => transmitter_ready
+    );
 end Behavioral;
